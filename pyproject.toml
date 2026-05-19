@@ -1,0 +1,17 @@
+[project]
+name = "smart-financial-reconciliation"
+version = "0.1.0"
+description = "Intelligent financial reconciliation for bank statements and accounting ledgers"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "openpyxl>=3.1",
+  "pypdf>=4.0",
+  "rapidfuzz>=3.6",
+  "streamlit>=1.35",
+  "ofxparse>=0.21",
+]
+
+[tool.setuptools]
+packages = ["financial_reconciliation", "financial_reconciliation.parsers"]

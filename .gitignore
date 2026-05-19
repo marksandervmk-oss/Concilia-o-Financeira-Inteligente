@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local data and generated artifacts
+data/
+outputs/
+*.db
+*.sqlite
+*.sqlite3
+*.pkl
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.ofx
+*.txt
+!requirements.txt
+!runtime.txt
+
+# Secrets and local settings
+.env
+.env.*
+.streamlit/secrets.toml
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
