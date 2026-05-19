@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import inspect
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -272,10 +273,16 @@ def _month_periods(df: pd.DataFrame) -> list[pd.Period]:
     return sorted(dates.dt.to_period("M").unique())
 
 
-def _format_periods(periods: list[pd.Period]) -> str:
-    if not periods:
+def _format_periods(periods: object) -> str:
+    if periods is None:
         return "-"
-    return ", ".join(period.strftime("%m/%Y") for period in periods)
+    try:
+        values = sorted(list(periods))
+    except TypeError:
+        values = []
+    if not values:
+        return "-"
+    return ", ".join(period.strftime("%m/%Y") for period in values)
 
 
 def _scope_common_period(bank: pd.DataFrame, ledger: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
@@ -345,6 +352,70 @@ def _render_period_notice(info: dict[str, object]) -> None:
     if not info or not info.get("has_warning"):
         return
     st.warning(str(info.get("message", "")))
+
+
+def _period_scope_frame(period_info: dict[str, object]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Item": "Período do extrato",
+                "Início": period_info.get("bank_start"),
+                "Fim": period_info.get("bank_end"),
+                "Meses": _format_periods(period_info.get("bank_months", [])),
+                "Observação": "",
+            },
+            {
+                "Item": "Período do razão",
+                "Início": period_info.get("ledger_start"),
+                "Fim": period_info.get("ledger_end"),
+                "Meses": _format_periods(period_info.get("ledger_months", [])),
+                "Observação": "",
+            },
+            {
+                "Item": "Período conciliado",
+                "Início": period_info.get("common_start"),
+                "Fim": period_info.get("common_end"),
+                "Meses": _format_periods(period_info.get("common_months", [])),
+                "Observação": "A conciliação considera somente os meses em comum entre os arquivos.",
+            },
+            {
+                "Item": "Aviso",
+                "Início": None,
+                "Fim": None,
+                "Meses": "",
+                "Observação": str(period_info.get("message", "")),
+            },
+        ]
+    )
+
+
+def _append_period_scope(output_path: Path, period_info: dict[str, object]) -> None:
+    if not period_info:
+        return
+    with pd.ExcelWriter(output_path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+        _period_scope_frame(period_info).to_excel(writer, sheet_name="Escopo", index=False)
+        excluded_bank = period_info.get("excluded_bank")
+        excluded_ledger = period_info.get("excluded_ledger")
+        if isinstance(excluded_bank, pd.DataFrame) and not excluded_bank.empty:
+            excluded_bank.to_excel(writer, sheet_name="Fora período extrato", index=False)
+        if isinstance(excluded_ledger, pd.DataFrame) and not excluded_ledger.empty:
+            excluded_ledger.to_excel(writer, sheet_name="Fora período razão", index=False)
+
+
+def _export_excel_report(result, output_path: Path, period_info: dict[str, object]) -> None:
+    try:
+        supports_period_info = "period_info" in inspect.signature(export_excel).parameters
+    except (TypeError, ValueError):
+        supports_period_info = False
+
+    if supports_period_info:
+        export_excel(result, output_path, period_info=period_info)
+    else:
+        export_excel(result, output_path)
+        try:
+            _append_period_scope(output_path, period_info)
+        except Exception:
+            st.warning("Relatório gerado, mas não foi possível incluir a aba de escopo do período.")
 
 
 def _page_header() -> None:
@@ -557,7 +628,7 @@ if run:
         output_dir = Path("outputs")
         output_name = f"relatorio_conciliacao_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
         output_path = output_dir / output_name
-        export_excel(result, output_path, period_info=period_info)
+        _export_excel_report(result, output_path, period_info)
         xlsx_bytes = output_path.read_bytes()
 
         st.session_state["analysis_result"] = result
