@@ -11,7 +11,9 @@ Projeto reutilizavel para comparar extratos bancarios com razao contabil/finance
 - Usa fuzzy matching com RapidFuzz quando instalado e fallback com `difflib`.
 - Usa PyMuPDF para acelerar a leitura de PDFs grandes, com fallback para `pypdf`.
 - Classifica cada achado como alta, media ou baixa confianca.
-- Gera Excel com resumo, pendencias, matches, duplicidades e bases normalizadas.
+- Mostra entradas e saidas separadamente na interface.
+- Gera Excel com resumo, entradas, saidas, pendencias, matches, duplicidades e bases normalizadas.
+- Disponibiliza botao `Exportar XLSX` ao final da conciliacao.
 - Salva analises e aliases em SQLite para melhorar reconciliacoes futuras.
 
 ## Arquitetura
@@ -103,9 +105,13 @@ python -m financial_reconciliation.cli `
 O Excel exportado contem:
 
 - `Resumo`: quantidades, totais e percentual de conciliacao.
+- `Resumo entradas saidas`: indicadores separados por entradas e saidas.
 - `Pendencias extrato`: movimentos bancarios sem razao ou com divergencia.
+- `Pend extrato entradas` e `Pend extrato saidas`: pendencias do extrato separadas por tipo.
 - `Pendencias razao`: lancamentos do razao sem extrato.
+- `Pend razao entradas` e `Pend razao saidas`: pendencias do razao separadas por tipo.
 - `Matches`: correspondencias e scores detalhados.
+- `Matches entradas` e `Matches saidas`: correspondencias separadas por tipo.
 - `Duplicidades`: possiveis duplicidades por data, valor e texto.
 - `Base extrato` e `Base razao`: dados normalizados para auditoria.
 
