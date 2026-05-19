@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import tempfile
-from datetime import datetime
 import hashlib
 import html
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -21,11 +21,9 @@ st.markdown(
     """
     <style>
     :root {
-        --surface: #ffffff;
-        --surface-soft: #f8fafc;
-        --border: #dbe3ef;
+        --border: #d8e0ec;
         --ink: #172033;
-        --muted: #667085;
+        --muted: #475467;
         --blue: #1d4ed8;
         --green: #047857;
         --red: #dc2626;
@@ -47,11 +45,9 @@ st.markdown(
     section[data-testid="stSidebar"] h2,
     section[data-testid="stSidebar"] h3,
     section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] p {
-        color: #f9fafb !important;
-    }
+    section[data-testid="stSidebar"] p,
     section[data-testid="stSidebar"] small {
-        color: #cbd5e1 !important;
+        color: #f8fafc !important;
     }
     div[data-testid="stFileUploader"] section {
         background: rgba(255, 255, 255, 0.10);
@@ -62,34 +58,31 @@ st.markdown(
     div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzoneInstructions"] {
         color: #e5e7eb !important;
     }
-    div[data-testid="stFileUploader"] button {
-        border-radius: 8px;
-    }
     .stButton > button,
     div[data-testid="stDownloadButton"] > button {
         width: 100%;
         border-radius: 8px;
         border: 0;
-        background: #2563eb;
+        background: #1d4ed8;
         color: #ffffff;
-        font-weight: 700;
+        font-weight: 800;
         min-height: 44px;
     }
     .stButton > button:hover,
     div[data-testid="stDownloadButton"] > button:hover {
-        background: #1d4ed8;
+        background: #1e40af;
         color: #ffffff;
     }
     .hero {
-        background: linear-gradient(135deg, #ffffff 0%, #eef6ff 100%);
+        background: linear-gradient(135deg, #ffffff 0%, #edf6ff 100%);
         border: 1px solid var(--border);
         border-radius: 8px;
-        padding: 26px 28px;
+        padding: 28px;
         margin-bottom: 18px;
         box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
     }
     .hero-kicker {
-        color: #1d4ed8;
+        color: var(--blue);
         font-size: 12px;
         font-weight: 800;
         letter-spacing: .08em;
@@ -104,7 +97,7 @@ st.markdown(
         margin: 0;
     }
     .hero-subtitle {
-        color: #475467;
+        color: var(--muted);
         font-size: 15px;
         margin-top: 8px;
     }
@@ -118,9 +111,9 @@ st.markdown(
         box-shadow: 0 4px 14px rgba(16, 24, 40, 0.06);
     }
     .metric-label {
-        color: var(--muted);
+        color: #667085;
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 800;
         text-transform: uppercase;
         letter-spacing: .04em;
         margin-bottom: 8px;
@@ -132,7 +125,7 @@ st.markdown(
         font-weight: 800;
     }
     .metric-help {
-        color: #475467;
+        color: var(--muted);
         font-size: 12px;
         margin-top: 6px;
     }
@@ -155,19 +148,8 @@ st.markdown(
         margin-bottom: 4px;
     }
     .export-panel span {
-        color: #cbd5e1;
+        color: #dbeafe;
         font-size: 13px;
-    }
-    div[data-testid="stTabs"] button {
-        font-weight: 700;
-    }
-    div[data-testid="stTabs"] [role="tablist"] {
-        gap: 6px;
-    }
-    div[data-testid="stDataFrame"] {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        overflow: hidden;
     }
     .note-card {
         background: #ffffff;
@@ -177,6 +159,14 @@ st.markdown(
         padding: 14px 16px;
         color: #475467;
         margin-top: 14px;
+    }
+    div[data-testid="stTabs"] button {
+        font-weight: 800;
+    }
+    div[data-testid="stDataFrame"] {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
     }
     </style>
     """,
@@ -200,11 +190,161 @@ def _save_uploads(files: list, prefix: str) -> list[Path]:
 
 
 def _format_money(value: float) -> str:
-    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.0
+    return f"R$ {number:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def _format_count(value: float | int) -> str:
     return f"{int(value):,}".replace(",", ".")
+
+
+def _is_date_column(column: str) -> bool:
+    name = column.lower()
+    return "data" in name or name == "date" or name.endswith("_date")
+
+
+def _is_money_column(column: str) -> bool:
+    name = column.lower()
+    return (
+        "valor" in name
+        or "amount" in name
+        or "total" in name
+        or name in {"saldo", "debito", "credito", "débito", "crédito"}
+    )
+
+
+def _is_percent_column(column: str) -> bool:
+    return "percentual" in column.lower()
+
+
+def _format_display_table(df: pd.DataFrame) -> pd.DataFrame:
+    display = df.copy()
+    for column in display.columns:
+        column_name = str(column)
+        if _is_date_column(column_name):
+            dates = pd.to_datetime(display[column], errors="coerce")
+            display[column] = dates.dt.strftime("%d/%m/%Y").fillna("")
+        elif _is_money_column(column_name):
+            values = pd.to_numeric(display[column], errors="coerce")
+            display[column] = values.map(lambda value: "" if pd.isna(value) else _format_money(value))
+        elif _is_percent_column(column_name):
+            values = pd.to_numeric(display[column], errors="coerce")
+            display[column] = values.map(
+                lambda value: "" if pd.isna(value) else f"{value:.2%}".replace(".", ",")
+            )
+    return display
+
+
+def _date_range(df: pd.DataFrame) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    if df.empty or "date" not in df.columns:
+        return None, None
+    dates = pd.to_datetime(df["date"], errors="coerce").dropna()
+    if dates.empty:
+        return None, None
+    return pd.Timestamp(dates.min()).normalize(), pd.Timestamp(dates.max()).normalize()
+
+
+def _format_date(value: pd.Timestamp | None) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    return pd.Timestamp(value).strftime("%d/%m/%Y")
+
+
+def _format_months(df: pd.DataFrame) -> str:
+    if df.empty or "date" not in df.columns:
+        return "-"
+    dates = pd.to_datetime(df["date"], errors="coerce").dropna()
+    if dates.empty:
+        return "-"
+    months = sorted(dates.dt.to_period("M").unique())
+    return ", ".join(period.strftime("%m/%Y") for period in months)
+
+
+def _month_periods(df: pd.DataFrame) -> list[pd.Period]:
+    if df.empty or "date" not in df.columns:
+        return []
+    dates = pd.to_datetime(df["date"], errors="coerce").dropna()
+    if dates.empty:
+        return []
+    return sorted(dates.dt.to_period("M").unique())
+
+
+def _format_periods(periods: list[pd.Period]) -> str:
+    if not periods:
+        return "-"
+    return ", ".join(period.strftime("%m/%Y") for period in periods)
+
+
+def _scope_common_period(bank: pd.DataFrame, ledger: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
+    bank_start, bank_end = _date_range(bank)
+    ledger_start, ledger_end = _date_range(ledger)
+    bank_months = _month_periods(bank)
+    ledger_months = _month_periods(ledger)
+    info: dict[str, object] = {
+        "bank_start": bank_start,
+        "bank_end": bank_end,
+        "ledger_start": ledger_start,
+        "ledger_end": ledger_end,
+        "bank_months": bank_months,
+        "ledger_months": ledger_months,
+        "has_warning": False,
+        "message": "",
+        "excluded_bank": pd.DataFrame(),
+        "excluded_ledger": pd.DataFrame(),
+    }
+    if bank_start is None or bank_end is None or ledger_start is None or ledger_end is None:
+        return bank, ledger, info
+
+    common_months = sorted(set(bank_months) & set(ledger_months))
+    info["common_months"] = common_months
+    if not common_months:
+        info["has_warning"] = True
+        info["message"] = (
+            "Não há período em comum entre extrato e razão. "
+            "A conciliação deve ser feita com arquivos do mesmo intervalo."
+        )
+        return bank.iloc[0:0].copy(), ledger.iloc[0:0].copy(), info
+
+    common_start = common_months[0].to_timestamp(how="start").normalize()
+    common_end = common_months[-1].to_timestamp(how="end").normalize()
+    info["common_start"] = common_start
+    info["common_end"] = common_end
+
+    bank_periods = pd.to_datetime(bank["date"], errors="coerce").dt.to_period("M")
+    ledger_periods = pd.to_datetime(ledger["date"], errors="coerce").dt.to_period("M")
+    bank_mask = bank_periods.isin(common_months)
+    ledger_mask = ledger_periods.isin(common_months)
+    excluded_bank = bank.loc[~bank_mask].copy()
+    excluded_ledger = ledger.loc[~ledger_mask].copy()
+
+    if not excluded_bank.empty or not excluded_ledger.empty:
+        info["has_warning"] = True
+        pieces = [
+            f"Extrato: {_format_date(bank_start)} a {_format_date(bank_end)} ({_format_periods(bank_months)})",
+            f"Razão: {_format_date(ledger_start)} a {_format_date(ledger_end)} ({_format_periods(ledger_months)})",
+            f"Meses conciliados: {_format_periods(common_months)}",
+        ]
+        if not excluded_bank.empty:
+            pieces.append(
+                f"Fora da conciliação no extrato: {len(excluded_bank)} lançamentos ({_format_months(excluded_bank)})."
+            )
+        if not excluded_ledger.empty:
+            pieces.append(
+                f"Fora da conciliação no razão: {len(excluded_ledger)} lançamentos ({_format_months(excluded_ledger)})."
+            )
+        info["message"] = " | ".join(pieces)
+    info["excluded_bank"] = excluded_bank
+    info["excluded_ledger"] = excluded_ledger
+    return bank.loc[bank_mask].copy(), ledger.loc[ledger_mask].copy(), info
+
+
+def _render_period_notice(info: dict[str, object]) -> None:
+    if not info or not info.get("has_warning"):
+        return
+    st.warning(str(info.get("message", "")))
 
 
 def _page_header() -> None:
@@ -220,7 +360,7 @@ def _page_header() -> None:
     )
 
 
-def _metric_card(label: str, value: str, help_text: str = "", color: str = "#2563eb") -> None:
+def _metric_card(label: str, value: str, help_text: str = "", color: str = "#1d4ed8") -> None:
     st.markdown(
         f"""
         <div class="metric-card" style="--accent: {html.escape(color)};">
@@ -240,9 +380,9 @@ def _render_summary_cards(metrics: dict[str, float]) -> None:
     with columns[1]:
         _metric_card("Pendentes", _format_count(metrics["quantidade_pendente"]), "revisar lançamentos", "#dc2626")
     with columns[2]:
-        _metric_card("Total conciliado", _format_money(metrics["total_conciliado"]), "valor absoluto", "#2563eb")
+        _metric_card("Total conciliado", _format_money(metrics["total_conciliado"]), "valor absoluto", "#1d4ed8")
     with columns[3]:
-        _metric_card("Total pendente", _format_money(metrics["total_pendente"]), "valor absoluto", "#d97706")
+        _metric_card("Total pendente", _format_money(metrics["total_pendente"]), "valor absoluto", "#b45309")
     with columns[4]:
         _metric_card("Percentual", f"{metrics['percentual_conciliacao']:.1%}", "consolidado", "#4f46e5")
 
@@ -284,35 +424,16 @@ def _render_metric_row(metrics: dict[str, float]) -> None:
     with columns[2]:
         _metric_card("Pendentes", _format_count(metrics["quantidade_pendente"]), "em aberto", "#dc2626")
     with columns[3]:
-        _metric_card("Total pendente", _format_money(metrics["total_pendente"]), "valor absoluto", "#d97706")
+        _metric_card("Total pendente", _format_money(metrics["total_pendente"]), "valor absoluto", "#b45309")
     with columns[4]:
         _metric_card("Percentual", f"{metrics['percentual_conciliacao']:.1%}", "por quantidade", "#4f46e5")
-
-
-def _row_style(row: pd.Series) -> list[str]:
-    status = str(row.get("Status", row.get("status", ""))).lower()
-    if "conciliado" in status:
-        color = "background-color: #ecfdf3"
-    elif "nao encontrado" in status or "não encontrado" in status or "baixa" in status:
-        color = "background-color: #fef2f2"
-    elif "divergencia" in status or "parcial" in status:
-        color = "background-color: #fff7ed"
-    elif "duplicidade" in status:
-        color = "background-color: #eef2ff"
-    else:
-        color = ""
-    return [color for _ in row]
 
 
 def _render_table(df: pd.DataFrame, height: int = 360) -> None:
     if df.empty:
         st.info("Sem registros para exibir.")
         return
-    if len(df) > 5000:
-        st.dataframe(df, use_container_width=True, height=height)
-        return
-    styled = df.style.apply(_row_style, axis=1)
-    st.dataframe(styled, use_container_width=True, height=height)
+    st.dataframe(_format_display_table(df), use_container_width=True, height=height, hide_index=True)
 
 
 def _render_direction_tab(result, kind: str) -> None:
@@ -329,56 +450,8 @@ def _render_direction_tab(result, kind: str) -> None:
     _render_table(ledger_pending, height=260)
 
 
-_page_header()
-
-with st.sidebar:
-    st.header("Arquivos")
-    st.caption("Envie o extrato bancário e o razão contábil para executar a conciliação.")
-    bank_uploads = st.file_uploader(
-        "Extrato bancário",
-        type=["csv", "xlsx", "xls", "pdf", "ofx", "txt"],
-        accept_multiple_files=True,
-    )
-    ledger_uploads = st.file_uploader(
-        "Razão contábil / financeiro",
-        type=["csv", "xlsx", "xls", "pdf", "ofx", "txt"],
-        accept_multiple_files=True,
-    )
-
-    run = st.button("Executar conciliação", type="primary", use_container_width=True)
-
-
-if run:
-    config = ReconciliationConfig(
-        date_tolerance_days=0,
-        value_tolerance=0.0,
-        partial_date_window_days=0,
-        partial_value_window=0.0,
-        partial_value_percent=0.0,
-    ).normalized()
-    bank_paths = _save_uploads(bank_uploads, "bank_")
-    ledger_paths = _save_uploads(ledger_uploads, "ledger_")
-
-    if not bank_paths or not ledger_paths:
-        st.error("Envie pelo menos um extrato e um razão.")
-        st.stop()
-
-    with st.status("Processando arquivos...", expanded=True) as status:
-        st.write("Lendo extrato bancário...")
-        bank = load_many(bank_paths, "bank")
-        st.write(f"Extrato carregado: {len(bank):,} lançamentos.".replace(",", "."))
-
-        st.write("Lendo razão contábil/financeiro...")
-        ledger = load_many(ledger_paths, "ledger")
-        st.write(f"Razão carregado: {len(ledger):,} lançamentos.".replace(",", "."))
-
-        st.write("Executando conciliação...")
-        result = reconcile(bank, ledger, config=config)
-        st.write("Gerando relatório Excel...")
-        status.update(label="Conciliação concluída.", state="complete", expanded=False)
-
-    metrics = result.summary
-    _render_summary_cards(metrics)
+def _render_results(result, xlsx_bytes: bytes, xlsx_name: str) -> None:
+    _render_summary_cards(result.summary)
 
     tab_entries, tab_exits, tab_pending, tab_ledger, tab_matches, tab_duplicates, tab_base = st.tabs(
         [
@@ -412,9 +485,6 @@ if run:
             st.markdown('<div class="section-title">Razão</div>', unsafe_allow_html=True)
             _render_table(result.ledger_transactions, height=420)
 
-    output_dir = Path("outputs")
-    output_path = output_dir / f"relatorio_conciliacao_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
-    export_excel(result, output_path)
     st.markdown(
         """
         <div class="export-panel">
@@ -426,9 +496,82 @@ if run:
     )
     st.download_button(
         "Exportar XLSX",
-        data=output_path.read_bytes(),
-        file_name=output_path.name,
+        data=xlsx_bytes,
+        file_name=xlsx_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+
+_page_header()
+
+with st.sidebar:
+    st.header("Arquivos")
+    st.caption("Envie o extrato bancário e o razão contábil para executar a conciliação.")
+    bank_uploads = st.file_uploader(
+        "Extrato bancário",
+        type=["csv", "xlsx", "xls", "pdf", "ofx", "txt"],
+        accept_multiple_files=True,
+    )
+    ledger_uploads = st.file_uploader(
+        "Razão contábil / financeiro",
+        type=["csv", "xlsx", "xls", "pdf", "ofx", "txt"],
+        accept_multiple_files=True,
+    )
+    run = st.button("Executar conciliação", type="primary", use_container_width=True)
+
+
+if run:
+    config = ReconciliationConfig(
+        date_tolerance_days=0,
+        value_tolerance=0.0,
+        partial_date_window_days=0,
+        partial_value_window=0.0,
+        partial_value_percent=0.0,
+    ).normalized()
+    bank_paths = _save_uploads(bank_uploads, "bank_")
+    ledger_paths = _save_uploads(ledger_uploads, "ledger_")
+
+    if not bank_paths or not ledger_paths:
+        st.error("Envie pelo menos um extrato e um razão.")
+        st.stop()
+
+    with st.status("Processando arquivos...", expanded=True) as status:
+        st.write("Lendo extrato bancário...")
+        bank = load_many(bank_paths, "bank")
+        st.write(f"Extrato carregado: {len(bank):,} lançamentos.".replace(",", "."))
+
+        st.write("Lendo razão contábil/financeiro...")
+        ledger = load_many(ledger_paths, "ledger")
+        st.write(f"Arquivo do razão carregado: {len(ledger):,} lançamentos.".replace(",", "."))
+
+        scoped_bank, scoped_ledger, period_info = _scope_common_period(bank, ledger)
+        st.session_state["period_info"] = period_info
+        if period_info.get("has_warning"):
+            st.write("Período dos arquivos divergente; a conciliação usará apenas o intervalo comum.")
+
+        st.write("Executando conciliação...")
+        result = reconcile(scoped_bank, scoped_ledger, config=config)
+
+        st.write("Gerando relatório Excel...")
+        output_dir = Path("outputs")
+        output_name = f"relatorio_conciliacao_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+        output_path = output_dir / output_name
+        export_excel(result, output_path, period_info=period_info)
+        xlsx_bytes = output_path.read_bytes()
+
+        st.session_state["analysis_result"] = result
+        st.session_state["xlsx_bytes"] = xlsx_bytes
+        st.session_state["xlsx_name"] = output_name
+        status.update(label="Conciliação concluída.", state="complete", expanded=False)
+
+
+if "analysis_result" in st.session_state:
+    _render_period_notice(st.session_state.get("period_info", {}))
+    _render_results(
+        st.session_state["analysis_result"],
+        st.session_state["xlsx_bytes"],
+        st.session_state["xlsx_name"],
     )
 else:
     st.markdown(
