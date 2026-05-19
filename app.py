@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import tempfile
 from datetime import datetime
+import hashlib
 from pathlib import Path
 
 import streamlit as st
 
 from financial_reconciliation.config import ReconciliationConfig
-from financial_reconciliation.database import ReconciliationStore
 from financial_reconciliation.matching import reconcile
 from financial_reconciliation.parsers import load_many
 from financial_reconciliation.reports import export_excel
@@ -17,12 +17,16 @@ st.set_page_config(page_title="Conciliacao Financeira Inteligente", layout="wide
 
 
 def _save_uploads(files: list, prefix: str) -> list[Path]:
-    temp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+    temp_dir = Path(tempfile.gettempdir()) / "financial_reconciliation_uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     for file in files or []:
-        safe_name = Path(file.name).name
-        path = temp_dir / safe_name
-        path.write_bytes(file.getbuffer())
+        data = file.getbuffer()
+        digest = hashlib.sha1(bytes(data)).hexdigest()[:20]
+        suffix = Path(file.name).suffix.lower()
+        path = temp_dir / f"{prefix}_{digest}{suffix}"
+        if not path.exists():
+            path.write_bytes(data)
         paths.append(path)
     return paths
 
@@ -75,8 +79,6 @@ if run:
         partial_value_window=0.0,
         partial_value_percent=0.0,
     ).normalized()
-    store = ReconciliationStore("data/reconciliation.db")
-
     if use_samples:
         bank_paths, ledger_paths = sample_bank_paths, sample_ledger_paths
     else:
@@ -87,25 +89,19 @@ if run:
         st.error("Envie pelo menos um extrato e um razao.")
         st.stop()
 
-    with st.spinner("Lendo arquivos e executando matching inteligente..."):
+    with st.status("Processando arquivos...", expanded=True) as status:
+        st.write("Lendo extrato bancario...")
         bank = load_many(bank_paths, "bank")
-        ledger = load_many(ledger_paths, "ledger")
-        result = reconcile(bank, ledger, config=config, alias_memory=store.load_alias_memory())
+        st.write(f"Extrato carregado: {len(bank):,} lancamentos.".replace(",", "."))
 
-    store.save_analysis(
-        name=f"Analise {datetime.now():%Y-%m-%d %H:%M}",
-        config=config,
-        summary=result.summary,
-        bank=result.bank_transactions,
-        ledger=result.ledger_transactions,
-        matches=result.matches,
-    )
-    store.learn_from_matches(
-        result.bank_transactions,
-        result.ledger_transactions,
-        result.matches,
-        config.learn_min_score,
-    )
+        st.write("Lendo razao contabil/financeiro...")
+        ledger = load_many(ledger_paths, "ledger")
+        st.write(f"Razao carregado: {len(ledger):,} lancamentos.".replace(",", "."))
+
+        st.write("Executando conciliacao...")
+        result = reconcile(bank, ledger, config=config)
+        st.write("Gerando relatorio Excel...")
+        status.update(label="Conciliacao concluida.", state="complete", expanded=False)
 
     metrics = result.summary
     col1, col2, col3, col4, col5 = st.columns(5)

@@ -9,6 +9,7 @@ Projeto reutilizavel para comparar extratos bancarios com razao contabil/finance
 - Remove acentos, caracteres especiais e palavras irrelevantes como LTDA, ME, EIRELI, PAGAMENTO, PIX e TED.
 - Compara extrato e razao por valor exato, data exata, historico, direcao do movimento e historico de equivalencias.
 - Usa fuzzy matching com RapidFuzz quando instalado e fallback com `difflib`.
+- Usa PyMuPDF para acelerar a leitura de PDFs grandes, com fallback para `pypdf`.
 - Classifica cada achado como alta, media ou baixa confianca.
 - Gera Excel com resumo, pendencias, matches, duplicidades e bases normalizadas.
 - Salva analises e aliases em SQLite para melhorar reconciliacoes futuras.
