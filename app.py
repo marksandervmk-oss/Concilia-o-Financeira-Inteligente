@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import html
-import importlib
-import inspect
+import shutil
 import tempfile
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import streamlit as st
@@ -15,16 +15,15 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from financial_reconciliation.config import ReconciliationConfig
-import financial_reconciliation.matching as matching_engine
+from financial_reconciliation.models import ensure_canonical
 from financial_reconciliation.parsers import load_many
-from financial_reconciliation.reports import export_excel
 
 
 st.set_page_config(page_title="Conciliação Financeira Inteligente", layout="wide")
 
-APP_VERSION = "data-valor-exato-v6"
+APP_VERSION = "data-valor-exato-v7"
 if st.session_state.get("_app_version") != APP_VERSION:
-    for key in ["analysis_result", "xlsx_bytes", "xlsx_name", "period_info"]:
+    for key in ["analysis_result", "period_info"]:
         st.session_state.pop(key, None)
     st.session_state["_app_version"] = APP_VERSION
 
@@ -189,15 +188,26 @@ def _save_uploads(files: list, prefix: str) -> list[Path]:
     temp_dir = Path(tempfile.gettempdir()) / "financial_reconciliation_uploads"
     temp_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
-    for file in files or []:
-        data = file.getbuffer()
-        digest = hashlib.sha1(bytes(data)).hexdigest()[:20]
+    for index, file in enumerate(files or [], start=1):
+        size = int(getattr(file, "size", 0) or 0)
+        fingerprint = f"{file.name}|{size}|{index}".encode("utf-8", errors="ignore")
+        digest = hashlib.sha1(fingerprint).hexdigest()[:20]
         suffix = Path(file.name).suffix.lower()
         path = temp_dir / f"{prefix}_{digest}{suffix}"
-        if not path.exists():
-            path.write_bytes(data)
+        file.seek(0)
+        with path.open("wb") as handle:
+            shutil.copyfileobj(file, handle, length=1024 * 1024)
+        file.seek(0)
         paths.append(path)
     return paths
+
+
+def _total_upload_mb(*groups: list) -> float:
+    total = 0
+    for files in groups:
+        for file in files or []:
+            total += int(getattr(file, "size", 0) or 0)
+    return total / (1024 * 1024)
 
 
 def _format_money(value: float) -> str:
@@ -357,14 +367,21 @@ def _tab_excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
 
 
 def _download_tab_excel(label: str, sheets: dict[str, pd.DataFrame], slug: str) -> None:
-    st.download_button(
-        label,
-        data=_tab_excel_bytes(sheets),
-        file_name=f"{slug}_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"download_{slug}",
-        use_container_width=True,
-    )
+    data_key = f"xlsx_bytes_{slug}"
+    name_key = f"xlsx_name_{slug}"
+    if st.button(label, key=f"prepare_{slug}", use_container_width=True):
+        with st.spinner("Preparando arquivo Excel..."):
+            st.session_state[data_key] = _tab_excel_bytes(sheets)
+            st.session_state[name_key] = f"{slug}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    if data_key in st.session_state:
+        st.download_button(
+            "Baixar XLSX preparado",
+            data=st.session_state[data_key],
+            file_name=st.session_state.get(name_key, f"{slug}.xlsx"),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"download_{slug}",
+            use_container_width=True,
+        )
 
 
 def _date_range(df: pd.DataFrame) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
@@ -483,13 +500,150 @@ def _render_period_notice(info: dict[str, object]) -> None:
 
 
 def _clear_analysis_state() -> None:
-    for key in ["analysis_result", "xlsx_bytes", "xlsx_name", "period_info"]:
+    for key in ["analysis_result", "period_info"]:
         st.session_state.pop(key, None)
+    for key in list(st.session_state.keys()):
+        if key.startswith(("xlsx_bytes_", "xlsx_name_")) or key in {"full_xlsx_bytes", "full_xlsx_name"}:
+            st.session_state.pop(key, None)
+
+
+def _detect_exact_duplicates(df: pd.DataFrame, source_label: str) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    work = df.copy()
+    work["_data"] = pd.to_datetime(work["date"], errors="coerce").dt.date.astype(str)
+    work["_valor"] = pd.to_numeric(work["abs_amount"], errors="coerce").round(2)
+    duplicated = work[work.duplicated(["_data", "_valor"], keep=False)].copy()
+    if duplicated.empty:
+        return pd.DataFrame()
+    duplicated["origem"] = source_label
+    return duplicated[
+        [
+            "origem",
+            "date",
+            "amount",
+            "description",
+            "counterparty",
+            "source_file",
+            "source_row",
+            "transaction_id",
+        ]
+    ].sort_values(["date", "amount", "description"])
 
 
 def _reconcile_with_current_engine(bank: pd.DataFrame, ledger: pd.DataFrame, config: ReconciliationConfig):
-    engine = importlib.reload(matching_engine)
-    return engine.reconcile(bank, ledger, config=config)
+    bank = ensure_canonical(bank).reset_index(drop=True)
+    ledger = ensure_canonical(ledger).reset_index(drop=True)
+
+    ledger_groups: dict[tuple[pd.Timestamp, float], list[int]] = {}
+    for ledger_index, ledger_row in ledger.iterrows():
+        key = (
+            pd.Timestamp(ledger_row["date"]).normalize(),
+            round(abs(float(ledger_row["amount"])), 2),
+        )
+        ledger_groups.setdefault(key, []).append(int(ledger_index))
+
+    used_ledger: set[int] = set()
+    match_rows: list[dict[str, object]] = []
+    pending_bank_rows: list[dict[str, object]] = []
+
+    for bank_index, bank_row in bank.iterrows():
+        key = (
+            pd.Timestamp(bank_row["date"]).normalize(),
+            round(abs(float(bank_row["amount"])), 2),
+        )
+        candidates = [idx for idx in ledger_groups.get(key, []) if idx not in used_ledger]
+        if not candidates:
+            pending_bank_rows.append(
+                {
+                    "Data do extrato": bank_row["date"],
+                    "Valor": bank_row["amount"],
+                    "Histórico do banco": bank_row["description"],
+                    "Possível fornecedor": "",
+                    "Motivo da divergência": "Nenhum lançamento no razão com a mesma data e o mesmo valor.",
+                    "Nível de confiança": "Baixa confiança",
+                    "Status": "Não encontrado no razão",
+                    "Score": 0.0,
+                }
+            )
+            continue
+
+        ledger_index = candidates[0]
+        used_ledger.add(ledger_index)
+        ledger_row = ledger.loc[ledger_index]
+        duplicate_note = (
+            " Possível duplicidade indicada na aba Duplicidades."
+            if len(ledger_groups.get(key, [])) > 1
+            else ""
+        )
+        match_rows.append(
+            {
+                "bank_index": int(bank_index),
+                "ledger_index": int(ledger_index),
+                "bank_transaction_id": bank_row["transaction_id"],
+                "ledger_transaction_id": ledger_row["transaction_id"],
+                "data_extrato": bank_row["date"],
+                "valor_extrato": bank_row["amount"],
+                "historico_banco": bank_row["description"],
+                "data_razao": ledger_row["date"],
+                "valor_razao": ledger_row["amount"],
+                "historico_razao": ledger_row["description"],
+                "possivel_fornecedor": ledger_row["counterparty"],
+                "status": "Conciliado",
+                "motivo": "Data e valor batem exatamente; fornecedor e histórico ignorados como critério." + duplicate_note,
+                "nivel_confianca": "Alta confiança",
+                "score": 1.0,
+                "score_texto": 0.0,
+                "score_data": 1.0,
+                "score_valor": 1.0,
+                "diferenca_dias": 0,
+                "diferenca_valor": 0.0,
+            }
+        )
+
+    matched_ledger = set(used_ledger)
+    ledger_pending_rows = []
+    for ledger_index, ledger_row in ledger.iterrows():
+        if int(ledger_index) in matched_ledger:
+            continue
+        ledger_pending_rows.append(
+            {
+                "Data do razão": ledger_row["date"],
+                "Valor": ledger_row["amount"],
+                "Histórico do razão": ledger_row["description"],
+                "Conta": ledger_row["account"],
+                "Motivo": "Lançamento do razão sem correspondente no extrato com a mesma data e o mesmo valor.",
+                "Status": "Não encontrado no extrato",
+            }
+        )
+
+    matches = pd.DataFrame(match_rows)
+    bank_pending = pd.DataFrame(pending_bank_rows)
+    ledger_pending = pd.DataFrame(ledger_pending_rows)
+    duplicates = pd.concat(
+        [_detect_exact_duplicates(bank, "extrato"), _detect_exact_duplicates(ledger, "razão")],
+        ignore_index=True,
+    )
+    total_reconciled = float(matches["valor_extrato"].abs().sum()) if not matches.empty else 0.0
+    total_pending = float(bank_pending["Valor"].abs().sum()) if not bank_pending.empty else 0.0
+    summary = {
+        "quantidade_extrato": int(len(bank)),
+        "quantidade_razao": int(len(ledger)),
+        "quantidade_conciliada": int(len(matches)),
+        "quantidade_pendente": int(len(bank_pending)),
+        "total_conciliado": total_reconciled,
+        "total_pendente": total_pending,
+        "percentual_conciliacao": (len(matches) / len(bank)) if len(bank) else 0.0,
+    }
+    return SimpleNamespace(
+        bank_transactions=bank,
+        ledger_transactions=ledger,
+        matches=matches,
+        bank_pending=bank_pending,
+        ledger_pending=ledger_pending,
+        duplicates=duplicates,
+        summary=summary,
+    )
 
 
 def _period_scope_frame(period_info: dict[str, object]) -> pd.DataFrame:
@@ -541,19 +695,25 @@ def _append_period_scope(output_path: Path, period_info: dict[str, object]) -> N
 
 
 def _export_excel_report(result, output_path: Path, period_info: dict[str, object]) -> None:
-    try:
-        supports_period_info = "period_info" in inspect.signature(export_excel).parameters
-    except (TypeError, ValueError):
-        supports_period_info = False
-
-    if supports_period_info:
-        export_excel(result, output_path, period_info=period_info)
-    else:
-        export_excel(result, output_path)
-        try:
-            _append_period_scope(output_path, period_info)
-        except Exception:
-            st.warning("Relatório gerado, mas não foi possível incluir a aba de escopo do período.")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        _period_scope_frame(period_info).to_excel(writer, sheet_name="Escopo", index=False)
+        pd.DataFrame(
+            [{"Indicador": key, "Valor": value} for key, value in result.summary.items()]
+        ).to_excel(writer, sheet_name="Resumo", index=False)
+        result.bank_pending.to_excel(writer, sheet_name="Pendências extrato", index=False)
+        result.ledger_pending.to_excel(writer, sheet_name="Pendências razão", index=False)
+        result.matches.to_excel(writer, sheet_name="Matches", index=False)
+        result.duplicates.to_excel(writer, sheet_name="Duplicidades", index=False)
+        result.bank_transactions.to_excel(writer, sheet_name="Base extrato", index=False)
+        result.ledger_transactions.to_excel(writer, sheet_name="Base razão", index=False)
+        excluded_bank = period_info.get("excluded_bank")
+        excluded_ledger = period_info.get("excluded_ledger")
+        if isinstance(excluded_bank, pd.DataFrame) and not excluded_bank.empty:
+            excluded_bank.to_excel(writer, sheet_name="Fora período extrato", index=False)
+        if isinstance(excluded_ledger, pd.DataFrame) and not excluded_ledger.empty:
+            excluded_ledger.to_excel(writer, sheet_name="Fora período razão", index=False)
+        _format_excel_workbook(writer)
 
 
 def _page_header() -> None:
@@ -638,6 +798,9 @@ def _render_metric_row(metrics: dict[str, float]) -> None:
         _metric_card("Percentual", f"{metrics['percentual_conciliacao']:.1%}", "por quantidade", "#4f46e5")
 
 
+DISPLAY_ROW_LIMIT = 1000
+
+
 def _render_table(df: pd.DataFrame, height: int = 360, filter_motive_key: str | None = None) -> pd.DataFrame:
     if filter_motive_key:
         df = _apply_motive_filter(df, filter_motive_key)
@@ -646,7 +809,13 @@ def _render_table(df: pd.DataFrame, height: int = 360, filter_motive_key: str | 
     if df.empty:
         st.info("Sem registros para exibir.")
         return df
-    st.dataframe(_format_display_table(df), use_container_width=True, height=height, hide_index=True)
+    display_df = df.head(DISPLAY_ROW_LIMIT)
+    if len(df) > DISPLAY_ROW_LIMIT:
+        st.caption(
+            f"Exibindo os primeiros {DISPLAY_ROW_LIMIT:,} de {len(df):,} registros. "
+            "Use a exportação da aba para baixar a tabela completa."
+        )
+    st.dataframe(_format_display_table(display_df), use_container_width=True, height=height, hide_index=True)
     return df
 
 
@@ -676,7 +845,46 @@ def _render_direction_tab(result, kind: str, slug: str) -> None:
     _render_table(filtered_ledger_pending, height=260)
 
 
-def _render_results(result, xlsx_bytes: bytes, xlsx_name: str) -> None:
+def _prepare_full_excel(result, period_info: dict[str, object]) -> tuple[bytes, str]:
+    output_dir = Path(tempfile.gettempdir()) / "financial_reconciliation_outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_name = f"relatorio_conciliacao_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    output_path = output_dir / output_name
+    _export_excel_report(result, output_path, period_info)
+    return output_path.read_bytes(), output_name
+
+
+def _render_full_export(result) -> None:
+    st.markdown(
+        """
+        <div class="export-panel">
+            <strong>Relatório pronto para Excel</strong>
+            <span>Prepare o XLSX somente quando precisar baixar. Isso evita travamentos com arquivos grandes no Streamlit Cloud.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("Preparar relatório completo XLSX", key="prepare_full_xlsx", use_container_width=True):
+        with st.spinner("Gerando relatório completo..."):
+            try:
+                data, name = _prepare_full_excel(result, st.session_state.get("period_info", {}))
+                st.session_state["full_xlsx_bytes"] = data
+                st.session_state["full_xlsx_name"] = name
+            except Exception as exc:
+                st.error("Não foi possível gerar o Excel completo. Tente exportar uma aba específica.")
+                with st.expander("Detalhes técnicos"):
+                    st.exception(exc)
+    if "full_xlsx_bytes" in st.session_state:
+        st.download_button(
+            "Baixar relatório completo XLSX",
+            data=st.session_state["full_xlsx_bytes"],
+            file_name=st.session_state.get("full_xlsx_name", "relatorio_conciliacao.xlsx"),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+
+def _render_results(result) -> None:
     cleaned_bank_pending = _hide_legacy_motives(_clean_legacy_motives(result.bank_pending))
     display_summary = dict(result.summary)
     display_summary["quantidade_pendente"] = len(cleaned_bank_pending)
@@ -729,35 +937,22 @@ def _render_results(result, xlsx_bytes: bytes, xlsx_name: str) -> None:
         )
         _render_table(result.duplicates, height=460)
     with tab_base:
+        st.info("As bases completas podem ser grandes. Exiba ou exporte somente quando necessário.")
         _download_tab_excel(
-            "Exportar esta aba XLSX",
+            "Exportar bases XLSX",
             {"Base extrato": result.bank_transactions, "Base razão": result.ledger_transactions},
             "aba_bases",
         )
-        left, right = st.columns(2)
-        with left:
-            st.markdown('<div class="section-title">Extrato</div>', unsafe_allow_html=True)
-            _render_table(result.bank_transactions, height=420)
-        with right:
-            st.markdown('<div class="section-title">Razão</div>', unsafe_allow_html=True)
-            _render_table(result.ledger_transactions, height=420)
+        if st.checkbox("Mostrar bases na tela", value=False):
+            left, right = st.columns(2)
+            with left:
+                st.markdown('<div class="section-title">Extrato</div>', unsafe_allow_html=True)
+                _render_table(result.bank_transactions, height=420)
+            with right:
+                st.markdown('<div class="section-title">Razão</div>', unsafe_allow_html=True)
+                _render_table(result.ledger_transactions, height=420)
 
-    st.markdown(
-        """
-        <div class="export-panel">
-            <strong>Relatório pronto para Excel</strong>
-            <span>Baixe o arquivo XLSX com resumo, entradas, saídas, pendências, correspondências e bases normalizadas.</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.download_button(
-        "Exportar XLSX",
-        data=xlsx_bytes,
-        file_name=xlsx_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
+    _render_full_export(result)
 
 
 _page_header()
@@ -781,6 +976,13 @@ with st.sidebar:
 
 if run:
     _clear_analysis_state()
+    total_upload_mb = _total_upload_mb(bank_uploads, ledger_uploads)
+    if total_upload_mb > 160:
+        st.error(
+            "Os arquivos enviados somam mais de 160 MB. No Streamlit Cloud, execute a conciliação em períodos menores "
+            "ou envie menos PDFs por análise para evitar queda do servidor."
+        )
+        st.stop()
     config = ReconciliationConfig(
         date_tolerance_days=0,
         value_tolerance=0.0,
@@ -813,17 +1015,7 @@ if run:
             st.write("Executando conciliação...")
             result = _reconcile_with_current_engine(scoped_bank, scoped_ledger, config=config)
 
-            st.write("Gerando relatório Excel...")
-            output_dir = Path(tempfile.gettempdir()) / "financial_reconciliation_outputs"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_name = f"relatorio_conciliacao_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
-            output_path = output_dir / output_name
-            _export_excel_report(result, output_path, period_info)
-            xlsx_bytes = output_path.read_bytes()
-
             st.session_state["analysis_result"] = result
-            st.session_state["xlsx_bytes"] = xlsx_bytes
-            st.session_state["xlsx_name"] = output_name
             status.update(label="Conciliação concluída.", state="complete", expanded=False)
     except Exception as exc:
         _clear_analysis_state()
@@ -834,11 +1026,7 @@ if run:
 
 if "analysis_result" in st.session_state:
     _render_period_notice(st.session_state.get("period_info", {}))
-    _render_results(
-        st.session_state["analysis_result"],
-        st.session_state["xlsx_bytes"],
-        st.session_state["xlsx_name"],
-    )
+    _render_results(st.session_state["analysis_result"])
 else:
     note_text = (
         "Arquivos carregados. Clique em Executar conciliação para visualizar os resultados."
