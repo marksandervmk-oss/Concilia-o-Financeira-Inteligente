@@ -440,6 +440,14 @@ def _clear_analysis_state() -> None:
         st.session_state.pop(key, None)
 
 
+def _discard_legacy_result() -> None:
+    _clear_analysis_state()
+    st.session_state["analysis_notice"] = (
+        "A regra foi atualizada. Execute a conciliação novamente para recalcular por data e valor."
+    )
+    st.rerun()
+
+
 def _period_scope_frame(period_info: dict[str, object]) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -693,6 +701,9 @@ def _render_results(result, xlsx_bytes: bytes, xlsx_name: str) -> None:
 
 _page_header()
 
+if st.session_state.get("analysis_notice"):
+    st.info(st.session_state.pop("analysis_notice"))
+
 with st.sidebar:
     st.header("Arquivos")
     st.caption("Envie o extrato bancário e o razão contábil para executar a conciliação.")
@@ -757,8 +768,7 @@ if run:
 
 if "analysis_result" in st.session_state:
     if _has_legacy_messages(st.session_state["analysis_result"]):
-        _clear_analysis_state()
-        st.warning("A regra de conciliação foi atualizada. Execute a conciliação novamente para recalcular por data e valor.")
+        _discard_legacy_result()
     else:
         _render_period_notice(st.session_state.get("period_info", {}))
         _render_results(
