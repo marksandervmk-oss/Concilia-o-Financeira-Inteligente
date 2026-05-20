@@ -22,7 +22,7 @@ from financial_reconciliation.reports import export_excel
 
 st.set_page_config(page_title="Conciliação Financeira Inteligente", layout="wide")
 
-APP_VERSION = "data-valor-exato-v5"
+APP_VERSION = "data-valor-exato-v6"
 if st.session_state.get("_app_version") != APP_VERSION:
     for key in ["analysis_result", "xlsx_bytes", "xlsx_name", "period_info"]:
         st.session_state.pop(key, None)
