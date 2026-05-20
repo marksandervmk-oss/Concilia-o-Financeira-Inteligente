@@ -21,6 +21,12 @@ from financial_reconciliation.reports import export_excel
 
 st.set_page_config(page_title="Conciliação Financeira Inteligente", layout="wide")
 
+APP_VERSION = "valor-exato-v1"
+if st.session_state.get("_app_version") != APP_VERSION:
+    for key in ["analysis_result", "xlsx_bytes", "xlsx_name", "period_info"]:
+        st.session_state.pop(key, None)
+    st.session_state["_app_version"] = APP_VERSION
+
 st.markdown(
     """
     <style>
@@ -483,7 +489,7 @@ def _page_header() -> None:
         <div class="hero">
             <div class="hero-kicker">Auditoria financeira</div>
             <h1 class="hero-title">Conciliação Financeira Inteligente</h1>
-            <div class="hero-subtitle">Extrato bancário x razão contábil com conciliação exata por data e valor, sem considerar fornecedor ou histórico.</div>
+            <div class="hero-subtitle">Extrato bancário x razão contábil com conciliação exata pelo valor, sem considerar data, fornecedor ou histórico.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -669,7 +675,7 @@ _page_header()
 with st.sidebar:
     st.header("Arquivos")
     st.caption("Envie o extrato bancário e o razão contábil para executar a conciliação.")
-    st.caption("Critério de comparação: mesma data e mesmo valor. Fornecedor e histórico são ignorados no match.")
+    st.caption("Critério de comparação: mesmo valor. Data, fornecedor e histórico são ignorados no match.")
     bank_uploads = st.file_uploader(
         "Extrato bancário",
         type=["csv", "xlsx", "xls", "pdf", "ofx", "txt"],
