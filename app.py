@@ -22,7 +22,7 @@ from financial_reconciliation.reports import export_excel
 
 st.set_page_config(page_title="Conciliação Financeira Inteligente", layout="wide")
 
-APP_VERSION = "data-valor-exato-v4"
+APP_VERSION = "data-valor-exato-v5"
 if st.session_state.get("_app_version") != APP_VERSION:
     for key in ["analysis_result", "xlsx_bytes", "xlsx_name", "period_info"]:
         st.session_state.pop(key, None)
@@ -795,34 +795,41 @@ if run:
         st.error("Envie pelo menos um extrato e um razão.")
         st.stop()
 
-    with st.status("Processando arquivos...", expanded=True) as status:
-        st.write("Lendo extrato bancário...")
-        bank = load_many(bank_paths, "bank")
-        st.write(f"Extrato carregado: {len(bank):,} lançamentos.".replace(",", "."))
+    try:
+        with st.status("Processando arquivos...", expanded=True) as status:
+            st.write("Lendo extrato bancário...")
+            bank = load_many(bank_paths, "bank")
+            st.write(f"Extrato carregado: {len(bank):,} lançamentos.".replace(",", "."))
 
-        st.write("Lendo razão contábil/financeiro...")
-        ledger = load_many(ledger_paths, "ledger")
-        st.write(f"Arquivo do razão carregado: {len(ledger):,} lançamentos.".replace(",", "."))
+            st.write("Lendo razão contábil/financeiro...")
+            ledger = load_many(ledger_paths, "ledger")
+            st.write(f"Arquivo do razão carregado: {len(ledger):,} lançamentos.".replace(",", "."))
 
-        scoped_bank, scoped_ledger, period_info = _scope_common_period(bank, ledger)
-        st.session_state["period_info"] = period_info
-        if period_info.get("has_warning"):
-            st.write("Período dos arquivos divergente; a conciliação usará apenas o intervalo comum.")
+            scoped_bank, scoped_ledger, period_info = _scope_common_period(bank, ledger)
+            st.session_state["period_info"] = period_info
+            if period_info.get("has_warning"):
+                st.write("Período dos arquivos divergente; a conciliação usará apenas o intervalo comum.")
 
-        st.write("Executando conciliação...")
-        result = _reconcile_with_current_engine(scoped_bank, scoped_ledger, config=config)
+            st.write("Executando conciliação...")
+            result = _reconcile_with_current_engine(scoped_bank, scoped_ledger, config=config)
 
-        st.write("Gerando relatório Excel...")
-        output_dir = Path("outputs")
-        output_name = f"relatorio_conciliacao_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
-        output_path = output_dir / output_name
-        _export_excel_report(result, output_path, period_info)
-        xlsx_bytes = output_path.read_bytes()
+            st.write("Gerando relatório Excel...")
+            output_dir = Path(tempfile.gettempdir()) / "financial_reconciliation_outputs"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_name = f"relatorio_conciliacao_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+            output_path = output_dir / output_name
+            _export_excel_report(result, output_path, period_info)
+            xlsx_bytes = output_path.read_bytes()
 
-        st.session_state["analysis_result"] = result
-        st.session_state["xlsx_bytes"] = xlsx_bytes
-        st.session_state["xlsx_name"] = output_name
-        status.update(label="Conciliação concluída.", state="complete", expanded=False)
+            st.session_state["analysis_result"] = result
+            st.session_state["xlsx_bytes"] = xlsx_bytes
+            st.session_state["xlsx_name"] = output_name
+            status.update(label="Conciliação concluída.", state="complete", expanded=False)
+    except Exception as exc:
+        _clear_analysis_state()
+        st.error("Não foi possível concluir a conciliação. Corrigi o app para mostrar este erro na tela em vez de derrubar a página.")
+        with st.expander("Detalhes técnicos"):
+            st.exception(exc)
 
 
 if "analysis_result" in st.session_state:
