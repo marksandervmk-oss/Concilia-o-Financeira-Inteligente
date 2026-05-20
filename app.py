@@ -5,10 +5,13 @@ import html
 import inspect
 import tempfile
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from financial_reconciliation.config import ReconciliationConfig
 from financial_reconciliation.matching import reconcile
@@ -239,6 +242,62 @@ def _format_display_table(df: pd.DataFrame) -> pd.DataFrame:
     return display
 
 
+def _safe_sheet_name(name: str) -> str:
+    cleaned = "".join("_" if char in r'[]:*?/\\' else char for char in name)
+    return cleaned[:31] or "Dados"
+
+
+def _format_excel_workbook(writer: pd.ExcelWriter) -> None:
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    header_font = Font(color="FFFFFF", bold=True)
+    money_format = '"R$" #,##0.00'
+
+    for sheet in writer.book.worksheets:
+        sheet.freeze_panes = "A2"
+        for cell in sheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+
+        headers = [cell.value for cell in sheet[1]]
+        for index, header in enumerate(headers, start=1):
+            column_letter = get_column_letter(index)
+            max_len = len(str(header)) if header is not None else 0
+            for row in range(2, sheet.max_row + 1):
+                cell = sheet.cell(row=row, column=index)
+                if _is_date_column(str(header)):
+                    cell.number_format = "DD/MM/YYYY"
+                elif _is_money_column(str(header)):
+                    cell.number_format = money_format
+                elif _is_percent_column(str(header)):
+                    cell.number_format = "0.00%"
+                max_len = max(max_len, len(str(cell.value)) if cell.value is not None else 0)
+            sheet.column_dimensions[column_letter].width = min(max(max_len + 2, 12), 60)
+
+
+@st.cache_data(show_spinner=False)
+def _tab_excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, df in sheets.items():
+            export_df = df.copy()
+            if export_df.empty:
+                export_df = pd.DataFrame({"Resultado": ["Sem registros para exibir."]})
+            export_df.to_excel(writer, sheet_name=_safe_sheet_name(sheet_name), index=False)
+        _format_excel_workbook(writer)
+    return output.getvalue()
+
+
+def _download_tab_excel(label: str, sheets: dict[str, pd.DataFrame], slug: str) -> None:
+    st.download_button(
+        label,
+        data=_tab_excel_bytes(sheets),
+        file_name=f"{slug}_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"download_{slug}",
+        use_container_width=True,
+    )
+
+
 def _date_range(df: pd.DataFrame) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
     if df.empty or "date" not in df.columns:
         return None, None
@@ -424,7 +483,7 @@ def _page_header() -> None:
         <div class="hero">
             <div class="hero-kicker">Auditoria financeira</div>
             <h1 class="hero-title">Conciliação Financeira Inteligente</h1>
-            <div class="hero-subtitle">Extrato bancário x razão contábil com revisão por entradas, saídas e pendências.</div>
+            <div class="hero-subtitle">Extrato bancário x razão contábil com chave obrigatória por data e valor, revisado por entradas, saídas e pendências.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -507,11 +566,21 @@ def _render_table(df: pd.DataFrame, height: int = 360) -> None:
     st.dataframe(_format_display_table(df), use_container_width=True, height=height, hide_index=True)
 
 
-def _render_direction_tab(result, kind: str) -> None:
+def _render_direction_tab(result, kind: str, slug: str) -> None:
     _render_metric_row(_direction_metrics(result, kind))
     pending = _filter_amount(result.bank_pending, "Valor", kind)
     matches = _filter_amount(result.matches, "valor_extrato", kind)
     ledger_pending = _filter_amount(result.ledger_pending, "Valor", kind)
+
+    _download_tab_excel(
+        "Exportar esta aba XLSX",
+        {
+            "Pendências no extrato": pending,
+            "Correspondências": matches,
+            "Pendências no razão": ledger_pending,
+        },
+        slug,
+    )
 
     st.markdown('<div class="section-title">Pendências no extrato</div>', unsafe_allow_html=True)
     _render_table(pending, height=320)
@@ -536,18 +605,39 @@ def _render_results(result, xlsx_bytes: bytes, xlsx_name: str) -> None:
         ]
     )
     with tab_entries:
-        _render_direction_tab(result, "entrada")
+        _render_direction_tab(result, "entrada", "aba_entradas")
     with tab_exits:
-        _render_direction_tab(result, "saida")
+        _render_direction_tab(result, "saida", "aba_saidas")
     with tab_pending:
+        _download_tab_excel(
+            "Exportar esta aba XLSX",
+            {"Pendências extrato": result.bank_pending},
+            "aba_pendencias_extrato",
+        )
         _render_table(result.bank_pending, height=460)
     with tab_ledger:
+        _download_tab_excel(
+            "Exportar esta aba XLSX",
+            {"Pendências razão": result.ledger_pending},
+            "aba_pendencias_razao",
+        )
         _render_table(result.ledger_pending, height=460)
     with tab_matches:
+        _download_tab_excel("Exportar esta aba XLSX", {"Matches": result.matches}, "aba_matches")
         _render_table(result.matches, height=460)
     with tab_duplicates:
+        _download_tab_excel(
+            "Exportar esta aba XLSX",
+            {"Duplicidades": result.duplicates},
+            "aba_duplicidades",
+        )
         _render_table(result.duplicates, height=460)
     with tab_base:
+        _download_tab_excel(
+            "Exportar esta aba XLSX",
+            {"Base extrato": result.bank_transactions, "Base razão": result.ledger_transactions},
+            "aba_bases",
+        )
         left, right = st.columns(2)
         with left:
             st.markdown('<div class="section-title">Extrato</div>', unsafe_allow_html=True)
@@ -579,6 +669,7 @@ _page_header()
 with st.sidebar:
     st.header("Arquivos")
     st.caption("Envie o extrato bancário e o razão contábil para executar a conciliação.")
+    st.caption("Critério de comparação: mesma data e mesmo valor. O histórico define apenas o nível de confiança.")
     bank_uploads = st.file_uploader(
         "Extrato bancário",
         type=["csv", "xlsx", "xls", "pdf", "ofx", "txt"],

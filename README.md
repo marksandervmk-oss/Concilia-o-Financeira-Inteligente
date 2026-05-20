@@ -7,7 +7,7 @@ Projeto reutilizável para comparar extratos bancários com razão contábil/fin
 - Importa CSV, XLSX, PDF, OFX e TXT.
 - Padroniza datas, valores, históricos, fornecedores e tipos de movimento.
 - Remove acentos, caracteres especiais e palavras irrelevantes como LTDA, ME, EIRELI, PAGAMENTO, PIX e TED.
-- Compara extrato e razão por valor exato, data exata, histórico, direção do movimento e histórico de equivalências.
+- Compara extrato e razão obrigatoriamente por data exata e valor exato; o histórico é usado apenas para nível de confiança e revisão.
 - Detecta meses diferentes entre os arquivos e concilia somente os meses em comum.
 - Usa fuzzy matching com RapidFuzz quando instalado e fallback com `difflib`.
 - Usa PyMuPDF para acelerar a leitura de PDFs grandes, com fallback para `pypdf`.
@@ -44,7 +44,7 @@ app.py                      Dashboard Streamlit
 1. Carrega todos os arquivos para um modelo único: data, valor, direção, histórico, fornecedor, conta, origem e linha.
 2. Normaliza texto removendo acentos, pontuação, termos societários e termos bancários irrelevantes.
 3. Verifica os meses de cada arquivo e restringe a análise aos meses que existem no extrato e no razão.
-4. Para cada lançamento do extrato, busca candidatos no razão com a mesma data e o mesmo valor.
+4. Para cada lançamento do extrato, busca candidatos no razão somente quando data e valor são iguais.
 5. Calcula score ponderado:
    - Valor: 34%
    - Data: 24%
@@ -52,7 +52,8 @@ app.py                      Dashboard Streamlit
    - Tipo/direção do movimento: 10%
    - Bônus de equivalência aprendida no SQLite quando houver alias confirmado em análises anteriores
 6. Faz seleção um-para-um pelo maior score.
-7. Classifica o resultado:
+7. Se data e valor batem, mas o histórico não parece equivalente, o item fica como `Correspondência parcial` para revisão manual.
+8. Classifica o resultado:
    - `Conciliado`
    - `Não encontrado no razão`
    - `Não encontrado no extrato`
@@ -118,6 +119,7 @@ O Excel exportado contém:
 - `Duplicidades`: possíveis duplicidades por data, valor e texto.
 - `Base extrato` e `Base razão`: dados normalizados para auditoria.
 - `Fora período extrato` e `Fora período razão`: lançamentos ignorados por estarem fora dos meses em comum.
+- Cada aba do dashboard também possui um botão próprio para exportar apenas os resultados daquela aba.
 
 ## Evolução futura
 
