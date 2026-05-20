@@ -22,7 +22,7 @@ from financial_reconciliation.reports import export_excel
 
 st.set_page_config(page_title="Conciliação Financeira Inteligente", layout="wide")
 
-APP_VERSION = "data-valor-exato-v3"
+APP_VERSION = "data-valor-exato-v4"
 if st.session_state.get("_app_version") != APP_VERSION:
     for key in ["analysis_result", "xlsx_bytes", "xlsx_name", "period_info"]:
         st.session_state.pop(key, None)
@@ -247,6 +247,68 @@ def _format_display_table(df: pd.DataFrame) -> pd.DataFrame:
                 lambda value: "" if pd.isna(value) else f"{value:.2%}".replace(".", ",")
             )
     return display
+
+
+LEGACY_DIVERGENCE_TERMS = (
+    "Match provável",
+    "Match provavel",
+    "Candidato fraco",
+    "Candidato apenas",
+    "Correspondência parcial",
+    "Correspondencia parcial",
+)
+
+
+def _motive_column(df: pd.DataFrame) -> str | None:
+    for column in ("Motivo da divergência", "Motivo"):
+        if column in df.columns:
+            return column
+    for column in df.columns:
+        if "motivo" in str(column).lower():
+            return str(column)
+    return None
+
+
+def _clean_legacy_motives(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    cleaned = df.copy()
+    column = _motive_column(cleaned)
+    if column is not None:
+        cleaned[column] = cleaned[column].replace(
+            {
+                "Nenhum candidato no razao dentro dos criterios de revisao.": "Nenhum lançamento no razão com a mesma data e o mesmo valor.",
+                "Nenhum candidato no razão dentro dos critérios de revisão.": "Nenhum lançamento no razão com a mesma data e o mesmo valor.",
+            }
+        )
+    return cleaned
+
+
+def _hide_legacy_motives(df: pd.DataFrame) -> pd.DataFrame:
+    motive_column = _motive_column(df)
+    if df.empty or motive_column is None:
+        return df
+    motives = df[motive_column].astype(str)
+    legacy_mask = motives.apply(lambda value: any(term in value for term in LEGACY_DIVERGENCE_TERMS))
+    return df.loc[~legacy_mask].copy()
+
+
+def _apply_motive_filter(df: pd.DataFrame, key: str) -> pd.DataFrame:
+    cleaned = _clean_legacy_motives(df)
+    motive_column = _motive_column(cleaned)
+    if cleaned.empty or motive_column is None:
+        return cleaned
+
+    options = ["Ocultar match provável/candidato fraco", "Mostrar todos"]
+    motives = sorted(value for value in cleaned[motive_column].dropna().astype(str).unique() if value)
+    options.extend(motives)
+    selected = st.selectbox("Filtro do motivo da divergência", options, key=f"motivo_{key}")
+
+    if selected == "Ocultar match provável/candidato fraco":
+        return _hide_legacy_motives(cleaned)
+    if selected == "Mostrar todos":
+        return cleaned
+    return cleaned[cleaned[motive_column].astype(str) == selected].copy()
 
 
 def _safe_sheet_name(name: str) -> str:
@@ -546,7 +608,7 @@ def _filter_amount(df: pd.DataFrame, column: str, kind: str) -> pd.DataFrame:
 def _direction_metrics(result, kind: str) -> dict[str, float]:
     bank = _filter_amount(result.bank_transactions, "amount", kind)
     matches = _filter_amount(result.matches, "valor_extrato", kind)
-    pending = _filter_amount(result.bank_pending, "Valor", kind)
+    pending = _filter_amount(_hide_legacy_motives(_clean_legacy_motives(result.bank_pending)), "Valor", kind)
     reconciled = matches[matches["status"] == "Conciliado"] if not matches.empty else matches
     total_bank = float(bank["amount"].abs().sum()) if not bank.empty else 0.0
     total_reconciled = float(reconciled["valor_extrato"].abs().sum()) if not reconciled.empty else 0.0
@@ -576,11 +638,16 @@ def _render_metric_row(metrics: dict[str, float]) -> None:
         _metric_card("Percentual", f"{metrics['percentual_conciliacao']:.1%}", "por quantidade", "#4f46e5")
 
 
-def _render_table(df: pd.DataFrame, height: int = 360) -> None:
+def _render_table(df: pd.DataFrame, height: int = 360, filter_motive_key: str | None = None) -> pd.DataFrame:
+    if filter_motive_key:
+        df = _apply_motive_filter(df, filter_motive_key)
+    else:
+        df = _clean_legacy_motives(df)
     if df.empty:
         st.info("Sem registros para exibir.")
-        return
+        return df
     st.dataframe(_format_display_table(df), use_container_width=True, height=height, hide_index=True)
+    return df
 
 
 def _render_direction_tab(result, kind: str, slug: str) -> None:
@@ -588,27 +655,37 @@ def _render_direction_tab(result, kind: str, slug: str) -> None:
     pending = _filter_amount(result.bank_pending, "Valor", kind)
     matches = _filter_amount(result.matches, "valor_extrato", kind)
     ledger_pending = _filter_amount(result.ledger_pending, "Valor", kind)
+    filtered_pending = _apply_motive_filter(pending, f"{slug}_pendencias_extrato")
+    filtered_ledger_pending = _apply_motive_filter(ledger_pending, f"{slug}_pendencias_razao")
 
     _download_tab_excel(
         "Exportar esta aba XLSX",
         {
-            "Pendências no extrato": pending,
+            "Pendências no extrato": filtered_pending,
             "Correspondências": matches,
-            "Pendências no razão": ledger_pending,
+            "Pendências no razão": filtered_ledger_pending,
         },
         slug,
     )
 
     st.markdown('<div class="section-title">Pendências no extrato</div>', unsafe_allow_html=True)
-    _render_table(pending, height=320)
+    _render_table(filtered_pending, height=320)
     st.markdown('<div class="section-title">Correspondências</div>', unsafe_allow_html=True)
     _render_table(matches, height=320)
     st.markdown('<div class="section-title">Pendências no razão</div>', unsafe_allow_html=True)
-    _render_table(ledger_pending, height=260)
+    _render_table(filtered_ledger_pending, height=260)
 
 
 def _render_results(result, xlsx_bytes: bytes, xlsx_name: str) -> None:
-    _render_summary_cards(result.summary)
+    cleaned_bank_pending = _hide_legacy_motives(_clean_legacy_motives(result.bank_pending))
+    display_summary = dict(result.summary)
+    display_summary["quantidade_pendente"] = len(cleaned_bank_pending)
+    display_summary["total_pendente"] = (
+        float(pd.to_numeric(cleaned_bank_pending["Valor"], errors="coerce").abs().sum())
+        if not cleaned_bank_pending.empty and "Valor" in cleaned_bank_pending.columns
+        else 0.0
+    )
+    _render_summary_cards(display_summary)
 
     tab_entries, tab_exits, tab_pending, tab_ledger, tab_matches, tab_duplicates, tab_base = st.tabs(
         [
@@ -626,19 +703,21 @@ def _render_results(result, xlsx_bytes: bytes, xlsx_name: str) -> None:
     with tab_exits:
         _render_direction_tab(result, "saida", "aba_saidas")
     with tab_pending:
+        filtered_pending = _apply_motive_filter(result.bank_pending, "aba_pendencias_extrato")
         _download_tab_excel(
             "Exportar esta aba XLSX",
-            {"Pendências extrato": result.bank_pending},
+            {"Pendências extrato": filtered_pending},
             "aba_pendencias_extrato",
         )
-        _render_table(result.bank_pending, height=460)
+        _render_table(filtered_pending, height=460)
     with tab_ledger:
+        filtered_ledger = _apply_motive_filter(result.ledger_pending, "aba_pendencias_razao")
         _download_tab_excel(
             "Exportar esta aba XLSX",
-            {"Pendências razão": result.ledger_pending},
+            {"Pendências razão": filtered_ledger},
             "aba_pendencias_razao",
         )
-        _render_table(result.ledger_pending, height=460)
+        _render_table(filtered_ledger, height=460)
     with tab_matches:
         _download_tab_excel("Exportar esta aba XLSX", {"Matches": result.matches}, "aba_matches")
         _render_table(result.matches, height=460)
