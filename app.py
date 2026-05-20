@@ -440,13 +440,6 @@ def _clear_analysis_state() -> None:
         st.session_state.pop(key, None)
 
 
-def _discard_legacy_result() -> None:
-    _clear_analysis_state()
-    st.session_state["auto_run_after_rule_update"] = True
-    st.session_state["analysis_notice"] = "A regra foi atualizada. Recalculando automaticamente por data e valor."
-    st.rerun()
-
-
 def _period_scope_frame(period_info: dict[str, object]) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -700,9 +693,6 @@ def _render_results(result, xlsx_bytes: bytes, xlsx_name: str) -> None:
 
 _page_header()
 
-if st.session_state.get("analysis_notice"):
-    st.info(st.session_state.pop("analysis_notice"))
-
 with st.sidebar:
     st.header("Arquivos")
     st.caption("Envie o extrato bancário e o razão contábil para executar a conciliação.")
@@ -720,13 +710,8 @@ with st.sidebar:
     run = st.button("Executar conciliação", type="primary", use_container_width=True)
 
 
-uploads_ready = bool(bank_uploads and ledger_uploads)
-auto_run = uploads_ready and "analysis_result" not in st.session_state
-if st.session_state.pop("auto_run_after_rule_update", False):
-    auto_run = uploads_ready
-should_run = run or auto_run
-
-if should_run:
+if run:
+    _clear_analysis_state()
     config = ReconciliationConfig(
         date_tolerance_days=0,
         value_tolerance=0.0,
@@ -773,7 +758,8 @@ if should_run:
 
 if "analysis_result" in st.session_state:
     if _has_legacy_messages(st.session_state["analysis_result"]):
-        _discard_legacy_result()
+        _clear_analysis_state()
+        st.info("A análise antiga foi descartada. Clique em Executar conciliação para recalcular por data e valor.")
     else:
         _render_period_notice(st.session_state.get("period_info", {}))
         _render_results(
@@ -783,7 +769,7 @@ if "analysis_result" in st.session_state:
         )
 else:
     note_text = (
-        "Arquivos carregados. A conciliação será executada automaticamente; se a página estiver pausada, clique em Rerun."
+        "Arquivos carregados. Clique em Executar conciliação para visualizar os resultados."
         if bank_uploads and ledger_uploads
         else "Configure os arquivos no painel lateral e execute a conciliação para visualizar os indicadores."
     )
