@@ -442,9 +442,8 @@ def _clear_analysis_state() -> None:
 
 def _discard_legacy_result() -> None:
     _clear_analysis_state()
-    st.session_state["analysis_notice"] = (
-        "A regra foi atualizada. Execute a conciliação novamente para recalcular por data e valor."
-    )
+    st.session_state["auto_run_after_rule_update"] = True
+    st.session_state["analysis_notice"] = "A regra foi atualizada. Recalculando automaticamente por data e valor."
     st.rerun()
 
 
@@ -721,7 +720,13 @@ with st.sidebar:
     run = st.button("Executar conciliação", type="primary", use_container_width=True)
 
 
-if run:
+uploads_ready = bool(bank_uploads and ledger_uploads)
+auto_run = uploads_ready and "analysis_result" not in st.session_state
+if st.session_state.pop("auto_run_after_rule_update", False):
+    auto_run = uploads_ready
+should_run = run or auto_run
+
+if should_run:
     config = ReconciliationConfig(
         date_tolerance_days=0,
         value_tolerance=0.0,
@@ -777,10 +782,15 @@ if "analysis_result" in st.session_state:
             st.session_state["xlsx_name"],
         )
 else:
+    note_text = (
+        "Arquivos carregados. A conciliação será executada automaticamente; se a página estiver pausada, clique em Rerun."
+        if bank_uploads and ledger_uploads
+        else "Configure os arquivos no painel lateral e execute a conciliação para visualizar os indicadores."
+    )
     st.markdown(
-        """
+        f"""
         <div class="note-card">
-            Configure os arquivos no painel lateral e execute a conciliação para visualizar os indicadores.
+            {html.escape(note_text)}
         </div>
         """,
         unsafe_allow_html=True,
