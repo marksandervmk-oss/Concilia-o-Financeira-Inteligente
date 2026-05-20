@@ -7,7 +7,7 @@ Projeto reutilizável para comparar extratos bancários com razão contábil/fin
 - Importa CSV, XLSX, PDF, OFX e TXT.
 - Padroniza datas, valores, históricos, fornecedores e tipos de movimento.
 - Remove acentos, caracteres especiais e palavras irrelevantes como LTDA, ME, EIRELI, PAGAMENTO, PIX e TED.
-- Compara extrato e razão obrigatoriamente por data exata e valor exato; o histórico é usado apenas para nível de confiança e revisão.
+- Compara extrato e razão obrigatoriamente por data exata e valor exato; fornecedor e histórico não interferem no match.
 - Detecta meses diferentes entre os arquivos e concilia somente os meses em comum.
 - Usa fuzzy matching com RapidFuzz quando instalado e fallback com `difflib`.
 - Usa PyMuPDF para acelerar a leitura de PDFs grandes, com fallback para `pypdf`.
@@ -52,7 +52,7 @@ app.py                      Dashboard Streamlit
    - Tipo/direção do movimento: 10%
    - Bônus de equivalência aprendida no SQLite quando houver alias confirmado em análises anteriores
 6. Faz seleção um-para-um pelo maior score.
-7. Se data e valor batem, mas o histórico não parece equivalente, o item fica como `Correspondência parcial` para revisão manual.
+7. Se data e valor batem, o item fica como `Conciliado`, mesmo que fornecedor ou histórico estejam diferentes.
 8. Classifica o resultado:
    - `Conciliado`
    - `Não encontrado no razão`

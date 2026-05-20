@@ -483,7 +483,7 @@ def _page_header() -> None:
         <div class="hero">
             <div class="hero-kicker">Auditoria financeira</div>
             <h1 class="hero-title">Conciliação Financeira Inteligente</h1>
-            <div class="hero-subtitle">Extrato bancário x razão contábil com chave obrigatória por data e valor, revisado por entradas, saídas e pendências.</div>
+            <div class="hero-subtitle">Extrato bancário x razão contábil com conciliação exata por data e valor, sem considerar fornecedor ou histórico.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -669,7 +669,7 @@ _page_header()
 with st.sidebar:
     st.header("Arquivos")
     st.caption("Envie o extrato bancário e o razão contábil para executar a conciliação.")
-    st.caption("Critério de comparação: mesma data e mesmo valor. O histórico define apenas o nível de confiança.")
+    st.caption("Critério de comparação: mesma data e mesmo valor. Fornecedor e histórico são ignorados no match.")
     bank_uploads = st.file_uploader(
         "Extrato bancário",
         type=["csv", "xlsx", "xls", "pdf", "ofx", "txt"],
