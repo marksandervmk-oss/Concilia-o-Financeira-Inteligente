@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import importlib
 import inspect
 import tempfile
 from datetime import datetime
@@ -14,14 +15,14 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from financial_reconciliation.config import ReconciliationConfig
-from financial_reconciliation.matching import reconcile
+import financial_reconciliation.matching as matching_engine
 from financial_reconciliation.parsers import load_many
 from financial_reconciliation.reports import export_excel
 
 
 st.set_page_config(page_title="Conciliação Financeira Inteligente", layout="wide")
 
-APP_VERSION = "data-valor-exato-v2"
+APP_VERSION = "data-valor-exato-v3"
 if st.session_state.get("_app_version") != APP_VERSION:
     for key in ["analysis_result", "xlsx_bytes", "xlsx_name", "period_info"]:
         st.session_state.pop(key, None)
@@ -419,25 +420,14 @@ def _render_period_notice(info: dict[str, object]) -> None:
     st.warning(str(info.get("message", "")))
 
 
-def _has_legacy_messages(result) -> bool:
-    legacy_terms = ("Match provável", "Candidato fraco", "Candidato apenas", "Correspondência parcial")
-    frames = [
-        getattr(result, "bank_pending", pd.DataFrame()),
-        getattr(result, "ledger_pending", pd.DataFrame()),
-        getattr(result, "matches", pd.DataFrame()),
-    ]
-    for frame in frames:
-        if frame.empty:
-            continue
-        text = frame.astype(str).to_string()
-        if any(term in text for term in legacy_terms):
-            return True
-    return False
-
-
 def _clear_analysis_state() -> None:
     for key in ["analysis_result", "xlsx_bytes", "xlsx_name", "period_info"]:
         st.session_state.pop(key, None)
+
+
+def _reconcile_with_current_engine(bank: pd.DataFrame, ledger: pd.DataFrame, config: ReconciliationConfig):
+    engine = importlib.reload(matching_engine)
+    return engine.reconcile(bank, ledger, config=config)
 
 
 def _period_scope_frame(period_info: dict[str, object]) -> pd.DataFrame:
@@ -741,7 +731,7 @@ if run:
             st.write("Período dos arquivos divergente; a conciliação usará apenas o intervalo comum.")
 
         st.write("Executando conciliação...")
-        result = reconcile(scoped_bank, scoped_ledger, config=config)
+        result = _reconcile_with_current_engine(scoped_bank, scoped_ledger, config=config)
 
         st.write("Gerando relatório Excel...")
         output_dir = Path("outputs")
@@ -757,16 +747,12 @@ if run:
 
 
 if "analysis_result" in st.session_state:
-    if _has_legacy_messages(st.session_state["analysis_result"]):
-        _clear_analysis_state()
-        st.info("A análise antiga foi descartada. Clique em Executar conciliação para recalcular por data e valor.")
-    else:
-        _render_period_notice(st.session_state.get("period_info", {}))
-        _render_results(
-            st.session_state["analysis_result"],
-            st.session_state["xlsx_bytes"],
-            st.session_state["xlsx_name"],
-        )
+    _render_period_notice(st.session_state.get("period_info", {}))
+    _render_results(
+        st.session_state["analysis_result"],
+        st.session_state["xlsx_bytes"],
+        st.session_state["xlsx_name"],
+    )
 else:
     note_text = (
         "Arquivos carregados. Clique em Executar conciliação para visualizar os resultados."
